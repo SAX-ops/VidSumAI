@@ -135,6 +135,8 @@ const connectWebSocket = (id: string) => {
 
     if (data.status === 'completed') {
       ws?.close()
+      // 自动触发浏览器下载保存对话框
+      handleDownloadFile()
     }
   }
 
