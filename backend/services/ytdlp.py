@@ -2,6 +2,7 @@ import json
 import uuid
 import os
 import asyncio
+import threading
 from typing import Optional
 from models import VideoInfo, FormatInfo
 
@@ -100,8 +101,7 @@ class YtdlpService:
         # Debug: log received quality
         print(f"[DEBUG] start_download called with quality='{quality}'")
 
-        # Map quality to yt-dlp format spec with fallback
-        # "360p" = best available up to 360p, "720p" = up to 720p, "1080p" = up to 1080p, "original" = best available
+        # Map quality to yt-dlp format spec
         format_map = {
             "360p": "best[height<=360]",
             "720p": "best[height<=720]",
@@ -112,53 +112,77 @@ class YtdlpService:
         format_spec = format_map.get(quality, "best[height<=720]")
         print(f"[DEBUG] format_spec='{format_spec}'")
 
-        cmd = [
-            "yt-dlp",
-            "-f", format_spec,
-            "--merge-output-format", "mp4",
-            "-o", output_path,
-            "--no-warnings",
-            url
-        ]
-        print(f"[DEBUG] yt-dlp command: {' '.join(cmd)}")
-
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-
         self.tasks[task_id] = {
-            "process": proc,
             "status": "downloading",
             "progress": 0,
             "output_path": output_path,
             "speed": "",
             "eta": "",
-            "downloaded": ""
+            "downloaded": "",
+            "file_path": None
         }
 
-        asyncio.create_task(self._wait_for_download(task_id, output_dir))
+        # Use yt-dlp as library with progress hooks
+        loop = asyncio.get_event_loop()
+
+        def progress_hook(d):
+            if d['status'] == 'downloading':
+                total = d.get('total_bytes') or d.get('total_bytes_estimate', 0)
+                downloaded = d.get('downloaded_bytes', 0)
+                speed = d.get('speed', '')
+                eta = d.get('eta', '')
+                downloaded_str = self._format_bytes(downloaded)
+
+                if total > 0:
+                    percent = (downloaded / total) * 100
+                else:
+                    percent = 0
+
+                # Update task progress
+                if task_id in self.tasks:
+                    self.tasks[task_id]['progress'] = percent
+                    self.tasks[task_id]['speed'] = speed
+                    self.tasks[task_id]['eta'] = eta
+                    self.tasks[task_id]['downloaded'] = downloaded_str
+
+            elif d['status'] == 'finished':
+                if task_id in self.tasks:
+                    self.tasks[task_id]['progress'] = 100
+                    self.tasks[task_id]['status'] = 'completed'
+
+        def download_thread():
+            import yt_dlp
+
+            ydl_opts = {
+                'format': format_spec,
+                'outtmpl': output_path,
+                'merge_output_format': 'mp4',
+                'progress_hooks': [progress_hook],
+                'quiet': True,
+                'no_warnings': True,
+            }
+
+            try:
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    ydl.download([url])
+
+                # Find downloaded file
+                for f in os.listdir(output_dir):
+                    if f.startswith(task_id):
+                        file_path = os.path.join(output_dir, f)
+                        if task_id in self.tasks:
+                            self.tasks[task_id]['file_path'] = file_path
+                        break
+            except Exception as e:
+                print(f"[ERROR] Download failed: {e}")
+                if task_id in self.tasks:
+                    self.tasks[task_id]['status'] = 'failed'
+
+        # Run download in thread pool
+        thread = threading.Thread(target=download_thread)
+        thread.start()
 
         return task_id
-
-    async def _wait_for_download(self, task_id: str, output_dir: str):
-        task = self.tasks[task_id]
-        proc = task["process"]
-        stdout, stderr = await proc.communicate()
-
-        if proc.returncode != 0:
-            task["status"] = "failed"
-            return
-
-        for f in os.listdir(output_dir):
-            if f.startswith(task_id):
-                task["file_path"] = os.path.join(output_dir, f)
-                task["status"] = "completed"
-                task["progress"] = 100
-                return
-
-        task["status"] = "failed"
 
     def _format_bytes(self, bytes_val: int) -> str:
         for unit in ['B', 'KB', 'MB', 'GB']:
