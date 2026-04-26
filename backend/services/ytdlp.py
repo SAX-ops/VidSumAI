@@ -122,6 +122,11 @@ class YtdlpService:
         return task_id
 
     async def _run_download(self, task_id: str, url: str, format_spec: str, output_path: str, output_dir: str):
+        import re
+        import threading
+        import queue
+        import subprocess
+
         cmd = [
             "yt-dlp",
             "-f", format_spec,
@@ -130,52 +135,64 @@ class YtdlpService:
             url
         ]
 
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
+        # Use a queue to pass output from thread to async loop
+        output_queue = queue.Queue()
+
+        def read_output():
+            # Run subprocess with line-buffered output
+            p = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                bufsize=1,
+                universal_newlines=True
+            )
+            for line in p.stdout:
+                output_queue.put(line.strip())
+            p.wait()
+            output_queue.put(None)  # Signal completion
+
+        # Start reading thread
+        thread = threading.Thread(target=read_output)
+        thread.start()
 
         last_percent = -1
 
-        # Read stdout line by line for progress (yt-dlp outputs progress to stdout)
-        async for line in proc.stdout:
-            line_str = line.decode('utf-8', errors='ignore')
+        # Process output from queue in async loop
+        while True:
+            try:
+                line = output_queue.get(timeout=0.5)
+                if line is None:
+                    break
 
-            # Parse progress from yt-dlp output like "[download]  87.6% of ~16.78MiB at  1.23MiB/s ETA 0:12"
-            if '[download]' in line_str and '%' in line_str:
-                try:
-                    # Extract percentage - look for pattern like "87.6%"
-                    percent = 0.0
-                    downloaded_str = ""
-                    total_str = ""
-                    speed = ""
-                    eta = ""
+                print(f"[DEBUG] yt-dlp output: {line}")
 
-                    # Parse line: "[download]   87.6% of ~16.78MiB at  1.23MiB/s ETA 0:12"
-                    # Split by spaces and parse
-                    import re
-                    # Match pattern: "87.6% of ~16.78MiB at 1.23MiB/s ETA 0:12"
-                    match = re.search(r'([\d.]+)% of (~?[\d.]+[KMGT]i?B)', line_str)
-                    if match:
-                        percent = float(match.group(1))
-                        total_str = match.group(2)
-                        # Calculate downloaded from percentage (assume 100% = total_str)
-                        downloaded_str = f"{float(match.group(2).replace('~','').replace('MiB','').replace('KiB','').replace('GiB','').replace('TiB','')) * percent / 100:.2f}{match.group(2)[-4:]}"
+                # Parse progress from yt-dlp output like "[download]  87.6% of ~16.78MiB at  1.23MiB/s ETA 0:12"
+                if '[download]' in line and '%' in line:
+                    try:
+                        percent = 0.0
+                        downloaded_str = ""
+                        speed = ""
+                        eta = ""
 
-                    # Extract speed after "at"
-                    speed_match = re.search(r'at ([\d.]+[KMGT]i?B/s)', line_str)
-                    if speed_match:
-                        speed = speed_match.group(1)
+                        # Match pattern: "87.6% of ~16.78MiB at 1.23MiB/s ETA 0:12"
+                        match = re.search(r'([\d.]+)% of (~?[\d.]+[KMGT]i?B)', line)
+                        if match:
+                            percent = float(match.group(1))
+                            total_str = match.group(2)
+                            # Calculate downloaded from percentage
+                            total_num = float(re.sub(r'[~KMGT]i?B', '', match.group(2)))
+                            downloaded_str = f"{total_num * percent / 100:.2f}MiB"
 
-                    # Extract ETA
-                    eta_match = re.search(r'ETA ([\d:]+)', line_str)
-                    if eta_match:
-                        eta = eta_match.group(1)
+                        # Extract speed after "at"
+                        speed_match = re.search(r'at ([\d.]+[KMGT]i?B/s)', line)
+                        if speed_match:
+                            speed = speed_match.group(1)
 
-                    # Only broadcast when progress changes by at least 1%
-                    if abs(percent - last_percent) >= 1 or speed or eta:
-                        last_percent = percent
+                        # Extract ETA
+                        eta_match = re.search(r'ETA ([\d:]+)', line)
+                        if eta_match:
+                            eta = eta_match.group(1)
 
                         # Update task progress
                         if task_id in self.tasks:
@@ -184,19 +201,32 @@ class YtdlpService:
                             self.tasks[task_id]['eta'] = eta
                             self.tasks[task_id]['downloaded'] = downloaded_str
 
-                except (ValueError, IndexError):
-                    pass
+                    except (ValueError, IndexError):
+                        pass
 
-        await proc.wait()
+            except queue.Empty:
+                # Check if download is still running
+                if task_id in self.tasks and self.tasks[task_id]['status'] in ('completed', 'failed'):
+                    break
+                continue
 
-        # Also read any stderr output for errors
-        stderr_output = await proc.stderr.read()
-        stderr_str = stderr_output.decode('utf-8', errors='ignore')
+        thread.join()
 
         # Find downloaded file
         file_path = None
         for f in os.listdir(output_dir):
             if f.startswith(task_id):
+                file_path = os.path.join(output_dir, f)
+                break
+
+        if file_path and os.path.exists(file_path):
+            if task_id in self.tasks:
+                self.tasks[task_id]['status'] = 'completed'
+                self.tasks[task_id]['progress'] = 100
+                self.tasks[task_id]['file_path'] = file_path
+        else:
+            if task_id in self.tasks:
+                self.tasks[task_id]['status'] = 'failed'
                 file_path = os.path.join(output_dir, f)
                 break
 
