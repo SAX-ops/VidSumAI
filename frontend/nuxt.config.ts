@@ -4,7 +4,7 @@ export default defineNuxtConfig({
   css: ['~/assets/css/main.css'],
   app: {
     head: {
-      title: 'VidSumAI - 8K 无水印视频下载',
+      title: 'VidSumAI - 无水印高清视频一键下载',
       meta: [
         { charset: 'utf-8' },
         { name: 'viewport', content: 'width=device-width, initial-scale=1' },
