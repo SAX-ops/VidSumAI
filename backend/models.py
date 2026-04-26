@@ -7,13 +7,14 @@ class FormatInfo(BaseModel):
     quality: str
     ext: str
     size: Optional[int] = None
-    url: str
+    url: str  # Direct playback URL for preview
 
 
 class VideoInfo(BaseModel):
     title: str
     thumbnail: str
     duration: Optional[int] = None
+    platform: str  # "YouTube", "TikTok", etc.
     formats: List[FormatInfo]
 
 
