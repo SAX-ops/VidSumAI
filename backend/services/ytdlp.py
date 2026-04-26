@@ -227,18 +227,6 @@ class YtdlpService:
         else:
             if task_id in self.tasks:
                 self.tasks[task_id]['status'] = 'failed'
-                file_path = os.path.join(output_dir, f)
-                break
-
-        if proc.returncode == 0 and file_path:
-            if task_id in self.tasks:
-                self.tasks[task_id]['status'] = 'completed'
-                self.tasks[task_id]['progress'] = 100
-                self.tasks[task_id]['file_path'] = file_path
-        else:
-            print(f"[ERROR] Download failed: {stderr_str}")
-            if task_id in self.tasks:
-                self.tasks[task_id]['status'] = 'failed'
 
     def _format_bytes(self, bytes_val: int) -> str:
         for unit in ['B', 'KB', 'MB', 'GB']:
