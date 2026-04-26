@@ -49,3 +49,4 @@ build/
 
 # uv
 .python-version
+.worktrees/
