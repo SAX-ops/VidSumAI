@@ -24,429 +24,184 @@
 
 ---
 
-## Task 1: Update Backend Models
+## Implementation Notes
 
-**Files:**
-- Modify: `backend/models.py`
+### Issues Fixed During Implementation
 
-- [ ] **Step 1: Read current models.py**
+1. **进度条实时更新**
+   - `ytdlp.py` 的 `_run_download` 使用 threading + queue 阻塞事件循环，改用纯 async subprocess
+   - yt-dlp stdout 被缓冲，添加 `--newline` 参数解决
+   - 正则表达式无法匹配多个空格，修复为 `%s+of%s+` 和 `ats+`
 
-Run: Read `backend/models.py`
+2. **清晰度选择**
+   - `VideoPreview.vue` 中 `qualityMap` 有重复键 `'1080p'`，已清理
+   - 后端 format_map 统一映射
 
-- [ ] **Step 2: Add platform and url fields**
+3. **B站解析**
+   - B站需要登录 Cookies，添加了 User-Agent 和 Referer 请求头但仍返回 412
+   - 暂时搁置，需 Cookies 方案
 
+### Key Code Patterns
+
+**yt-dlp 进度解析正则（已修复）：**
 ```python
-class FormatInfo(BaseModel):
-    quality: str
-    ext: str
-    size: Optional[int] = None
-    url: str  # Direct playback URL for preview
-
-
-class VideoInfo(BaseModel):
-    title: str
-    thumbnail: str
-    duration: Optional[int] = None
-    platform: str  # "YouTube", "TikTok", etc.
-    formats: List[FormatInfo]
+# 百分比和大小
+match = re.search(r'([\d.]+)%\s+of\s+([~]?[\d.]+[KMGT]i?B)', line)
+# 速度
+speed_match = re.search(r'at\s+([\d.]+\s*[KMGT]i?B/s)', line)
+# ETA
+eta_match = re.search(r'ETA\s+([\d:]+)', line)
 ```
 
-- [ ] **Step 3: Commit**
-
-```bash
-git add backend/models.py
-git commit -m "feat: add platform and url fields to VideoInfo/Format models"
+**yt-dlp 命令（带请求头）：**
+```python
+cmd = [
+    "yt-dlp",
+    "-f", format_spec,
+    "--merge-output-format", "mp4",
+    "--newline",
+    "--add-header", "User-Agent:Mozilla/5.0 ...",
+    "--add-header", "Referer:https://www.bilibili.com",
+    "-o", output_path,
+    url
+]
 ```
 
----
-
-## Task 2: Update Backend yt-dlp Service to Extract Platform and URL
-
-**Files:**
-- Modify: `backend/services/ytdlp.py`
-
-- [ ] **Step 1: Read current ytdlp.py**
-
-Run: Read `backend/services/ytdlp.py`
-
-- [ ] **Step 2: Add platform extraction function**
-
+**async subprocess 进度读取：**
 ```python
-def _extract_platform(self, url: str) -> str:
-    """Extract platform name from URL"""
-    if 'youtube.com' in url or 'youtu.be' in url:
-        return "YouTube"
-    elif 'tiktok.com' in url:
-        return "TikTok"
-    elif 'instagram.com' in url:
-        return "Instagram"
-    elif 'bilibili.com' in url:
-        return "Bilibili"
-    elif 'twitter.com' in url or 'x.com' in url:
-        return "X"
-    return "Unknown"
-```
-
-- [ ] **Step 3: Update parse_url to include platform and url**
-
-Find the `parse_url` method and update the FormatInfo creation to include url:
-
-```python
-formats.append(FormatInfo(
-    quality=quality,
-    ext=f.get("ext", "mp4"),
-    size=f.get("filesize") or f.get("filesize_approx"),
-    url=f.get("url", "")  # Direct playback URL
-))
-```
-
-And update VideoInfo return:
-
-```python
-return VideoInfo(
-    title=data.get("title", "Unknown"),
-    thumbnail=data.get("thumbnail", ""),
-    duration=data.get("duration"),
-    platform=self._extract_platform(url),
-    formats=unique_formats[:10]
+proc = await asyncio.create_subprocess_exec(
+    *cmd,
+    stdout=asyncio.subprocess.PIPE,
+    stderr=asyncio.subprocess.STDOUT
 )
-```
 
-- [ ] **Step 4: Commit**
+async def read_stream():
+    while True:
+        line = await proc.stdout.readline()
+        if not line:
+            break
+        yield line.decode().strip()
 
-```bash
-git add backend/services/ytdlp.py
-git commit -m "feat: extract platform name and include format url"
-```
-
----
-
-## Task 3: Add Backend /api/open-folder Endpoint
-
-**Files:**
-- Modify: `backend/routers/download.py`
-
-- [ ] **Step 1: Read current download.py**
-
-Run: Read `backend/routers/download.py`
-
-- [ ] **Step 2: Add open-folder endpoint**
-
-Add after existing endpoints:
-
-```python
-@router.post("/open-folder")
-async def open_folder(folder_path: str = None):
-    """Open the specified folder in file explorer (Windows)"""
-    import os
-    import subprocess
-
-    try:
-        if folder_path and os.path.exists(folder_path):
-            target = folder_path
-        else:
-            # Open default downloads folder for current user
-            target = os.path.join(os.path.expanduser("~"), "Downloads")
-
-        # Windows: use explorer to open folder
-        subprocess.Popen(f'explorer "{target}"')
-        return {"success": True, "path": target}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-```
-
-- [ ] **Step 3: Commit**
-
-```bash
-git add backend/routers/download.py
-git commit -m "feat: add open-folder endpoint to open downloads directory"
+async for line in read_stream():
+    # 解析进度...
+    await asyncio.sleep(0.05)  # 让出控制权给事件循环
 ```
 
 ---
 
-## Task 4: Create VideoPreview Component
+## Task 1: Update Backend Models ✅
 
-**Files:**
-- Create: `frontend/components/VideoPreview.vue`
+**Status:** COMPLETED
 
-- [ ] **Step 1: Create VideoPreview.vue**
-
-```vue
-<template>
-  <div v-if="videoInfo" class="max-w-2xl mx-auto mt-8 bg-dark-card border border-dark-border rounded-2xl overflow-hidden">
-    <!-- Video/Thumbnail Area -->
-    <div class="relative aspect-video bg-black">
-      <!-- Thumbnail (shown when not playing) -->
-      <img
-        v-if="!isPlaying"
-        :src="videoInfo.thumbnail"
-        class="w-full h-full object-contain"
-        alt="Video thumbnail"
-      />
-
-      <!-- Video Player (shown when playing) -->
-      <video
-        v-if="isPlaying && videoInfo.formats[selectedFormatIndex]?.url"
-        ref="videoPlayer"
-        :src="videoInfo.formats[selectedFormatIndex].url"
-        class="w-full h-full object-contain"
-        controls
-        autoplay
-        @error="onVideoError"
-      />
-
-      <!-- Play Button Overlay -->
-      <div
-        v-if="!isPlaying"
-        class="absolute inset-0 flex items-center justify-center bg-black/30 cursor-pointer"
-        @click="startPreview"
-      >
-        <div class="w-20 h-20 rounded-full gradient-bg flex items-center justify-center text-3xl">
-          ▶
-        </div>
-      </div>
-    </div>
-
-    <!-- Video Info -->
-    <div class="p-6">
-      <div class="flex items-center gap-2 text-sm text-gray-400 mb-2">
-        <span class="bg-primary-from/20 text-primary-from px-2 py-0.5 rounded">
-          {{ videoInfo.platform }}
-        </span>
-        <span v-if="videoInfo.duration">
-          {{ formatDuration(videoInfo.duration) }}
-        </span>
-      </div>
-      <h3 class="text-white text-lg font-semibold mb-4">
-        {{ videoInfo.title }}
-      </h3>
-      <p class="text-gray-500 text-sm">
-        已选画质：{{ selectedQuality }}
-      </p>
-    </div>
-
-    <!-- Action Buttons -->
-    <div class="px-6 pb-6 flex gap-4">
-      <button
-        class="flex-1 bg-white/10 border border-white/20 rounded-xl py-3 text-white font-semibold hover:bg-white/20 transition-all"
-        @click="startPreview"
-      >
-        {{ isPlaying ? '重新预览' : '预览视频' }}
-      </button>
-      <button
-        class="flex-1 gradient-bg border-none rounded-xl py-3 text-white font-bold hover:-translate-y-1 hover:shadow-[0_12px_32px_rgba(255,107,107,0.5)] transition-all"
-        @click="$emit('download')"
-      >
-        下载到本地
-      </button>
-    </div>
-  </div>
-</template>
-
-<script setup lang="ts">
-import type { VideoInfo } from '~/types'
-
-const props = defineProps<{
-  videoInfo: VideoInfo
-  selectedQuality: string
-}>()
-
-const emit = defineEmits<{
-  download: []
-}>()
-
-const isPlaying = ref(false)
-const selectedFormatIndex = computed(() => {
-  return props.videoInfo.formats.findIndex(f => f.quality === props.selectedQuality)
-})
-
-const startPreview = () => {
-  isPlaying.value = true
-}
-
-const onVideoError = () => {
-  alert('视频预览加载失败，请尝试其他清晰度或重新解析')
-  isPlaying.value = false
-}
-
-const formatDuration = (seconds: number) => {
-  const mins = Math.floor(seconds / 60)
-  const secs = seconds % 60
-  return `${mins}:${secs.toString().padStart(2, '0')}`
-}
-</script>
-```
-
-- [ ] **Step 2: Commit**
-
-```bash
-git add frontend/components/VideoPreview.vue
-git commit -m "feat: add VideoPreview component with thumbnail and playback"
-```
+- [x] Add `platform` field to VideoInfo
+- [x] Add `url` field to FormatInfo
+- [x] Commit: `backend/models.py`
 
 ---
 
-## Task 5: Update Frontend index.vue - Header and Flow
+## Task 2: Update Backend yt-dlp Service ✅
 
-**Files:**
-- Modify: `frontend/pages/index.vue`
+**Status:** COMPLETED
 
-- [ ] **Step 1: Read current index.vue**
-
-Run: Read `frontend/pages/index.vue`
-
-- [ ] **Step 2: Update header title and selling points**
-
-Find and update:
-```javascript
-// Change from:
-<h1 class="text-6xl font-extrabold text-center mb-5 leading-tight">
-  <span class="gradient-text">8K 无水印</span><br>
-  视频一键下载
-</h1>
-
-// To:
-<h1 class="text-6xl font-extrabold text-center mb-5 leading-tight">
-  <span class="gradient-text">无水印高清</span><br>
-  视频一键下载
-</h1>
-```
-
-Update selling points:
-```html
-<!-- Change from 8K Ultra HD and batch download tags -->
-<div class="flex items-center gap-2 bg-primary-from/10 border border-primary-from/20 rounded-full px-5 py-2.5 text-sm text-primary-from">
-  <span>🎬</span>
-  <span>4K 超高清</span>
-</div>
-<!-- Remove 批量下载 tag -->
-```
-
-- [ ] **Step 3: Add VideoPreview to template**
-
-Replace QualitySelector section with VideoPreview:
-
-```html
-<!-- Video Preview -->
-<VideoPreview
-  v-if="videoInfo"
-  :video-info="videoInfo"
-  :selected-quality="selectedQuality"
-  @download="handleDownload"
-/>
-
-<!-- Remove old QualitySelector and DownloadButton from here since they're now in VideoPreview -->
-```
-
-- [ ] **Step 4: Update script to remove duplicate QualitySelector and DownloadButton**
-
-Remove the old QualitySelector and the download button that were in index.vue since they're now in VideoPreview.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add frontend/pages/index.vue
-git commit -m "feat: update header text and integrate VideoPreview component"
-```
+- [x] Add `_extract_platform()` function
+- [x] Include format `url` in parse response
+- [x] Add User-Agent and Referer headers for B站
+- [x] Fix progress regex for multiple spaces
+- [x] Fix async subprocess for real-time progress
+- [x] Commit: `backend/services/ytdlp.py`
 
 ---
 
-## Task 6: Update ProgressTracker - Add Open Folder Button
+## Task 3: Add Backend /api/open-folder Endpoint ✅
 
-**Files:**
-- Modify: `frontend/components/ProgressTracker.vue`
+**Status:** COMPLETED
 
-- [ ] **Step 1: Read current ProgressTracker.vue**
-
-Run: Read `frontend/components/ProgressTracker.vue`
-
-- [ ] **Step 2: Add open folder functionality**
-
-Add new function:
-
-```javascript
-const openFolder = async () => {
-  try {
-    await $fetch(`${config.public.apiBase}/api/open-folder`, {
-      method: 'POST'
-    })
-  } catch (e) {
-    console.error('Failed to open folder:', e)
-  }
-}
-```
-
-Add button in template after download completes:
-
-```html
-<div v-if="progress.status === 'completed'" class="mt-4 flex gap-3 justify-center">
-  <button
-    class="bg-white/10 border border-white/20 rounded-xl px-6 py-3 text-white font-semibold hover:bg-white/20"
-    @click="openFolder"
-  >
-    📁 打开文件夹
-  </button>
-  <button
-    class="gradient-bg border-none rounded-xl px-6 py-3 text-white font-bold"
-    @click="$emit('download')"
-  >
-    重新下载
-  </button>
-</div>
-```
-
-- [ ] **Step 3: Commit**
-
-```bash
-git add frontend/components/ProgressTracker.vue
-git commit -m "feat: add open folder button to ProgressTracker"
-```
+- [x] Add `/api/open-folder` endpoint
+- [x] Open Windows Explorer with downloads folder
+- [x] Commit: `backend/routers/download.py`
 
 ---
 
-## Task 7: Integration Test
+## Task 4: Create VideoPreview Component ✅
 
-**Files:**
-- Test: Full flow
+**Status:** COMPLETED
 
-- [ ] **Step 1: Start backend**
+- [x] Create `VideoPreview.vue` with thumbnail display
+- [x] Add video player for preview
+- [x] Add quality selector
+- [x] Fix qualityMap duplicate key issue
+- [x] Commit: `frontend/components/VideoPreview.vue`
 
-Run:
-```bash
-cd backend && uv run uvicorn main:app --host 0.0.0.0 --port 8000
-```
+---
 
-- [ ] **Step 2: Start frontend**
+## Task 5: Update Frontend index.vue - Header and Flow ✅
 
-Run:
-```bash
-cd frontend && npm run dev
-```
+**Status:** COMPLETED
 
-- [ ] **Step 3: Test full flow in browser**
+- [x] Update header title and selling points
+- [x] Integrate VideoPreview component
+- [x] Add ProgressTracker component
+- [x] WebSocket for real-time progress
+- [x] Auto-trigger download after completion
+- [x] Commit: `frontend/pages/index.vue`
 
-1. Open http://localhost:3000
-2. Enter YouTube URL: `https://www.youtube.com/watch?v=dQw4w9WgXcQ`
-3. Click "解析"
-4. Verify video info shows (title, platform, thumbnail)
-5. Select quality (e.g., 1080p)
-6. Click "预览视频" - verify video plays
-7. Click "下载到本地" - verify download starts
-8. Wait for download to complete
-9. Verify "打开文件夹" button appears
-10. Click "打开文件夹" - verify explorer opens
+---
 
-- [ ] **Step 4: Fix any issues found**
+## Task 6: Update ProgressTracker - Add Open Folder Button ✅
+
+**Status:** COMPLETED
+
+- [x] Add "打开文件夹" button
+- [x] Display progress percentage
+- [x] Display speed and ETA
+- [x] Display downloaded size
+- [x] Commit: `frontend/components/ProgressTracker.vue`
+
+---
+
+## Task 7: Integration Test ✅
+
+**Status:** COMPLETED
+
+**Verified working:**
+- [x] Backend parse returns `platform` field
+- [x] Backend parse returns format `url` for preview
+- [x] Backend `/api/open-folder` works
+- [x] Frontend shows VideoPreview after parse
+- [x] Preview video plays correctly
+- [x] Download works with real-time progress (0% → 100%)
+- [x] Progress shows: percentage, speed, ETA, downloaded size
+- [x] Open folder button appears after download completes
+
+**Known limitations:**
+- B站视频解析需要登录 Cookies（暂时 not supported）
+- YouTube preview URLs may expire (expected behavior)
+
+---
+
+## Pending / Future Tasks
+
+### B站支持（需 Cookies）
+- [ ] 从浏览器导出 B站 cookies
+- [ ] 添加 `--cookies` 参数到 yt-dlp 命令
+- [ ] 测试 B站视频解析和下载
+
+### 优化项
+- [ ] 任务暂停/恢复功能
+- [ ] 多任务并行下载
+- [ ] 下载历史记录
+- [ ] 自定义下载路径选择器
 
 ---
 
 ## Verification Checklist
 
-- [ ] Backend parse returns `platform` field
-- [ ] Backend parse returns format `url` for preview
-- [ ] Backend /api/open-folder works
-- [ ] Frontend shows VideoPreview after parse
-- [ ] Preview video plays correctly
-- [ ] Download works with progress
-- [ ] Open folder button appears after download completes
-- [ ] Open folder opens Windows Explorer
+- [x] Backend parse returns `platform` field
+- [x] Backend parse returns format `url` for preview
+- [x] Backend /api/open-folder works
+- [x] Frontend shows VideoPreview after parse
+- [x] Preview video plays correctly
+- [x] Download works with real-time progress
+- [x] Progress updates: percentage, speed, ETA, downloaded size
+- [x] Open folder button appears after download completes
+- [x] Open folder opens Windows Explorer
