@@ -2,7 +2,6 @@ import json
 import uuid
 import os
 import asyncio
-import threading
 from typing import Optional
 from models import VideoInfo, FormatInfo
 
@@ -68,7 +67,6 @@ class YtdlpService:
 
         # Get max quality for display
         max_q = unique_formats[0].quality if unique_formats else "Unknown"
-        # Convert to user-friendly format: 2160p -> 4K, 1440p -> 2K, etc.
         max_q_display = max_q
         if max_q.endswith("p"):
             h = int(max_q.replace("p", ""))
@@ -98,9 +96,6 @@ class YtdlpService:
         task_id = str(uuid.uuid4())
         output_path = os.path.join(output_dir, f"{task_id}.%(ext)s")
 
-        # Debug: log received quality
-        print(f"[DEBUG] start_download called with quality='{quality}'")
-
         # Map quality to yt-dlp format spec
         format_map = {
             "360p": "best[height<=360]",
@@ -110,7 +105,6 @@ class YtdlpService:
             "audio": "bestaudio/best",
         }
         format_spec = format_map.get(quality, "best[height<=720]")
-        print(f"[DEBUG] format_spec='{format_spec}'")
 
         self.tasks[task_id] = {
             "status": "downloading",
@@ -122,67 +116,81 @@ class YtdlpService:
             "file_path": None
         }
 
-        # Use yt-dlp as library with progress hooks
-        loop = asyncio.get_event_loop()
-
-        def progress_hook(d):
-            if d['status'] == 'downloading':
-                total = d.get('total_bytes') or d.get('total_bytes_estimate', 0)
-                downloaded = d.get('downloaded_bytes', 0)
-                speed = d.get('speed', '')
-                eta = d.get('eta', '')
-                downloaded_str = self._format_bytes(downloaded)
-
-                if total > 0:
-                    percent = (downloaded / total) * 100
-                else:
-                    percent = 0
-
-                # Update task progress
-                if task_id in self.tasks:
-                    self.tasks[task_id]['progress'] = percent
-                    self.tasks[task_id]['speed'] = speed
-                    self.tasks[task_id]['eta'] = eta
-                    self.tasks[task_id]['downloaded'] = downloaded_str
-
-            elif d['status'] == 'finished':
-                if task_id in self.tasks:
-                    self.tasks[task_id]['progress'] = 100
-                    self.tasks[task_id]['status'] = 'completed'
-
-        def download_thread():
-            import yt_dlp
-
-            ydl_opts = {
-                'format': format_spec,
-                'outtmpl': output_path,
-                'merge_output_format': 'mp4',
-                'progress_hooks': [progress_hook],
-                'quiet': True,
-                'no_warnings': True,
-            }
-
-            try:
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    ydl.download([url])
-
-                # Find downloaded file
-                for f in os.listdir(output_dir):
-                    if f.startswith(task_id):
-                        file_path = os.path.join(output_dir, f)
-                        if task_id in self.tasks:
-                            self.tasks[task_id]['file_path'] = file_path
-                        break
-            except Exception as e:
-                print(f"[ERROR] Download failed: {e}")
-                if task_id in self.tasks:
-                    self.tasks[task_id]['status'] = 'failed'
-
-        # Run download in thread pool
-        thread = threading.Thread(target=download_thread)
-        thread.start()
+        # Start async download with real-time progress reading
+        asyncio.create_task(self._run_download(task_id, url, format_spec, output_path, output_dir))
 
         return task_id
+
+    async def _run_download(self, task_id: str, url: str, format_spec: str, output_path: str, output_dir: str):
+        cmd = [
+            "yt-dlp",
+            "-f", format_spec,
+            "--merge-output-format", "mp4",
+            "-o", output_path,
+            "--no-warnings",
+            url
+        ]
+
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stderr=asyncio.subprocess.PIPE
+        )
+
+        # Read stderr line by line for progress
+        async for line in proc.stderr:
+            line_str = line.decode('utf-8', errors='ignore')
+
+            # Parse progress from yt-dlp output like "[download]  87.6% of ~16.78MiB at  1.23MiB/s ETA 0:12"
+            if '[download]' in line_str and '%' in line_str:
+                try:
+                    # Extract percentage - look for pattern like "87.6%" or "87.6"
+                    parts = line_str.split('%')
+                    if len(parts) >= 1:
+                        percent_str = parts[0].split()[-1]
+                        percent = float(percent_str)
+
+                        # Extract speed and ETA if present
+                        speed = ""
+                        eta = ""
+                        downloaded = ""
+
+                        if 'at' in line_str:
+                            speed_parts = line_str.split('at')
+                            if len(speed_parts) >= 2:
+                                speed = speed_parts[-1].split('ETA')[0].strip() if 'ETA' in speed_parts[-1] else speed_parts[-1].strip()
+
+                        if 'ETA' in line_str:
+                            eta_parts = line_str.split('ETA')
+                            if len(eta_parts) >= 2:
+                                eta = eta_parts[-1].strip()
+
+                        # Update task progress
+                        if task_id in self.tasks:
+                            self.tasks[task_id]['progress'] = percent
+                            self.tasks[task_id]['speed'] = speed
+                            self.tasks[task_id]['eta'] = eta
+                            self.tasks[task_id]['downloaded'] = downloaded
+
+                except (ValueError, IndexError):
+                    pass
+
+        await proc.wait()
+
+        # Find downloaded file
+        file_path = None
+        for f in os.listdir(output_dir):
+            if f.startswith(task_id):
+                file_path = os.path.join(output_dir, f)
+                break
+
+        if proc.returncode == 0 and file_path:
+            if task_id in self.tasks:
+                self.tasks[task_id]['status'] = 'completed'
+                self.tasks[task_id]['progress'] = 100
+                self.tasks[task_id]['file_path'] = file_path
+        else:
+            if task_id in self.tasks:
+                self.tasks[task_id]['status'] = 'failed'
 
     def _format_bytes(self, bytes_val: int) -> str:
         for unit in ['B', 'KB', 'MB', 'GB']:
