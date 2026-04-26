@@ -47,7 +47,7 @@
         {{ videoInfo.title }}
       </h3>
       <p class="text-gray-500 text-sm">
-        已选画质：{{ selectedQuality }}
+        已选画质：{{ qualityLabel }}
       </p>
 
       <!-- Quality Selector -->
@@ -103,6 +103,15 @@ const selectedQuality = computed({
 
 const selectedFormatIndex = computed(() => {
   return props.videoInfo.formats.findIndex(f => f.quality === props.modelValue)
+})
+
+const qualityLabel = computed(() => {
+  const q = props.modelValue
+  if (q === '原画质') return `${props.videoInfo.max_quality}（原画）`
+  if (q === '360p') return '360p（低清）'
+  if (q === '720p') return '720p（标清）'
+  if (q === '1080p') return '1080p（高清）'
+  return q
 })
 
 const startPreview = () => {
