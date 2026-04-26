@@ -10,6 +10,20 @@ class YtdlpService:
     def __init__(self):
         self.tasks = {}
 
+    def _extract_platform(self, url: str) -> str:
+        """Extract platform name from URL"""
+        if 'youtube.com' in url or 'youtu.be' in url:
+            return "YouTube"
+        elif 'tiktok.com' in url:
+            return "TikTok"
+        elif 'instagram.com' in url:
+            return "Instagram"
+        elif 'bilibili.com' in url:
+            return "Bilibili"
+        elif 'twitter.com' in url or 'x.com' in url:
+            return "X"
+        return "Unknown"
+
     async def parse_url(self, url: str) -> VideoInfo:
         cmd = [
             "yt-dlp",
@@ -55,6 +69,7 @@ class YtdlpService:
             title=data.get("title", "Unknown"),
             thumbnail=data.get("thumbnail", ""),
             duration=data.get("duration"),
+            platform=self._extract_platform(url),
             formats=unique_formats[:10]
         )
 
