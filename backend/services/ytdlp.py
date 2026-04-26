@@ -146,36 +146,43 @@ class YtdlpService:
             if '[download]' in line_str and '%' in line_str:
                 try:
                     # Extract percentage - look for pattern like "87.6%"
-                    parts = line_str.split('%')
-                    if len(parts) >= 1:
-                        percent_str = parts[0].split()[-1]
-                        percent = float(percent_str)
+                    percent = 0.0
+                    downloaded_str = ""
+                    total_str = ""
+                    speed = ""
+                    eta = ""
 
-                        # Only broadcast when progress changes by at least 1%
-                        if abs(percent - last_percent) >= 1:
-                            last_percent = percent
+                    # Parse line: "[download]   87.6% of ~16.78MiB at  1.23MiB/s ETA 0:12"
+                    # Split by spaces and parse
+                    import re
+                    # Match pattern: "87.6% of ~16.78MiB at 1.23MiB/s ETA 0:12"
+                    match = re.search(r'([\d.]+)% of (~?[\d.]+[KMGT]i?B)', line_str)
+                    if match:
+                        percent = float(match.group(1))
+                        total_str = match.group(2)
+                        # Calculate downloaded from percentage (assume 100% = total_str)
+                        downloaded_str = f"{float(match.group(2).replace('~','').replace('MiB','').replace('KiB','').replace('GiB','').replace('TiB','')) * percent / 100:.2f}{match.group(2)[-4:]}"
 
-                            # Extract speed and ETA if present
-                            speed = ""
-                            eta = ""
-                            downloaded = ""
+                    # Extract speed after "at"
+                    speed_match = re.search(r'at ([\d.]+[KMGT]i?B/s)', line_str)
+                    if speed_match:
+                        speed = speed_match.group(1)
 
-                            if 'at' in line_str:
-                                speed_parts = line_str.split('at')
-                                if len(speed_parts) >= 2:
-                                    speed = speed_parts[-1].split('ETA')[0].strip() if 'ETA' in speed_parts[-1] else speed_parts[-1].strip()
+                    # Extract ETA
+                    eta_match = re.search(r'ETA ([\d:]+)', line_str)
+                    if eta_match:
+                        eta = eta_match.group(1)
 
-                            if 'ETA' in line_str:
-                                eta_parts = line_str.split('ETA')
-                                if len(eta_parts) >= 2:
-                                    eta = eta_parts[-1].strip()
+                    # Only broadcast when progress changes by at least 1%
+                    if abs(percent - last_percent) >= 1 or speed or eta:
+                        last_percent = percent
 
-                            # Update task progress
-                            if task_id in self.tasks:
-                                self.tasks[task_id]['progress'] = percent
-                                self.tasks[task_id]['speed'] = speed
-                                self.tasks[task_id]['eta'] = eta
-                                self.tasks[task_id]['downloaded'] = downloaded
+                        # Update task progress
+                        if task_id in self.tasks:
+                            self.tasks[task_id]['progress'] = percent
+                            self.tasks[task_id]['speed'] = speed
+                            self.tasks[task_id]['eta'] = eta
+                            self.tasks[task_id]['downloaded'] = downloaded_str
 
                 except (ValueError, IndexError):
                     pass
