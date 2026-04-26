@@ -74,15 +74,12 @@ async def download_direct(url: str, quality: str = "720p"):
     print(f"[DEBUG] download_direct called with quality='{quality}'")
 
     try:
-        # Map quality to yt-dlp format spec (simplified)
+        # Map quality to yt-dlp format spec with fallback
         format_map = {
-            "144p": "worst",
-            "240p": "best[height<=240]",
             "360p": "best[height<=360]",
-            "480p": "best[height<=480]",
             "720p": "best[height<=720]",
             "1080p": "best[height<=1080]",
-            "4k": "best[height<=2160]",
+            "原画质": "best",
             "audio": "bestaudio/best",
         }
         format_spec = format_map.get(quality, "best[height<=720]")

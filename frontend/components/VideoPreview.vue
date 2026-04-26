@@ -56,9 +56,10 @@
           v-model="selectedQuality"
           class="bg-dark-bg border border-dark-border rounded-lg px-3 py-2 text-white text-sm w-full"
         >
-          <option v-for="format in videoInfo.formats" :key="format.quality" :value="format.quality">
-            {{ format.quality }} {{ format.ext }}
-          </option>
+          <option value="360p">360p（低画质，省流量）</option>
+          <option value="720p">720p（推荐，平衡质量与大小）</option>
+          <option value="1080p">1080p（高清）</option>
+          <option value="原画质">原画质（视频最佳）</option>
         </select>
       </div>
     </div>

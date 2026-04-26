@@ -86,15 +86,13 @@ class YtdlpService:
         # Debug: log received quality
         print(f"[DEBUG] start_download called with quality='{quality}'")
 
-        # Map quality to yt-dlp format spec (simplified)
+        # Map quality to yt-dlp format spec with fallback
+        # "360p" = best available up to 360p, "720p" = up to 720p, "1080p" = up to 1080p, "original" = best available
         format_map = {
-            "144p": "worst",
-            "240p": "best[height<=240]",
             "360p": "best[height<=360]",
-            "480p": "best[height<=480]",
             "720p": "best[height<=720]",
             "1080p": "best[height<=1080]",
-            "4k": "best[height<=2160]",
+            "原画质": "best",
             "audio": "bestaudio/best",
         }
         format_spec = format_map.get(quality, "best[height<=720]")
