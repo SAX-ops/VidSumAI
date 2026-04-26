@@ -91,3 +91,22 @@ async def progress_websocket(websocket: WebSocket, task_id: str):
             await asyncio.sleep(0.5)
     except WebSocketDisconnect:
         pass
+
+
+@router.post("/open-folder")
+async def open_folder(folder_path: str = None):
+    """Open the specified folder in file explorer (Windows)"""
+    import subprocess
+
+    try:
+        if folder_path and os.path.exists(folder_path):
+            target = folder_path
+        else:
+            # Open default downloads folder for current user
+            target = os.path.join(os.path.expanduser("~"), "Downloads")
+
+        # Windows: use explorer to open folder
+        subprocess.Popen(f'explorer "{target}"')
+        return {"success": True, "path": target}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
