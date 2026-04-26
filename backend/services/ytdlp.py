@@ -127,54 +127,64 @@ class YtdlpService:
             "-f", format_spec,
             "--merge-output-format", "mp4",
             "-o", output_path,
-            "--no-warnings",
             url
         ]
 
         proc = await asyncio.create_subprocess_exec(
             *cmd,
+            stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
 
-        # Read stderr line by line for progress
-        async for line in proc.stderr:
+        last_percent = -1
+
+        # Read stdout line by line for progress (yt-dlp outputs progress to stdout)
+        async for line in proc.stdout:
             line_str = line.decode('utf-8', errors='ignore')
 
             # Parse progress from yt-dlp output like "[download]  87.6% of ~16.78MiB at  1.23MiB/s ETA 0:12"
             if '[download]' in line_str and '%' in line_str:
                 try:
-                    # Extract percentage - look for pattern like "87.6%" or "87.6"
+                    # Extract percentage - look for pattern like "87.6%"
                     parts = line_str.split('%')
                     if len(parts) >= 1:
                         percent_str = parts[0].split()[-1]
                         percent = float(percent_str)
 
-                        # Extract speed and ETA if present
-                        speed = ""
-                        eta = ""
-                        downloaded = ""
+                        # Only broadcast when progress changes by at least 1%
+                        if abs(percent - last_percent) >= 1:
+                            last_percent = percent
 
-                        if 'at' in line_str:
-                            speed_parts = line_str.split('at')
-                            if len(speed_parts) >= 2:
-                                speed = speed_parts[-1].split('ETA')[0].strip() if 'ETA' in speed_parts[-1] else speed_parts[-1].strip()
+                            # Extract speed and ETA if present
+                            speed = ""
+                            eta = ""
+                            downloaded = ""
 
-                        if 'ETA' in line_str:
-                            eta_parts = line_str.split('ETA')
-                            if len(eta_parts) >= 2:
-                                eta = eta_parts[-1].strip()
+                            if 'at' in line_str:
+                                speed_parts = line_str.split('at')
+                                if len(speed_parts) >= 2:
+                                    speed = speed_parts[-1].split('ETA')[0].strip() if 'ETA' in speed_parts[-1] else speed_parts[-1].strip()
 
-                        # Update task progress
-                        if task_id in self.tasks:
-                            self.tasks[task_id]['progress'] = percent
-                            self.tasks[task_id]['speed'] = speed
-                            self.tasks[task_id]['eta'] = eta
-                            self.tasks[task_id]['downloaded'] = downloaded
+                            if 'ETA' in line_str:
+                                eta_parts = line_str.split('ETA')
+                                if len(eta_parts) >= 2:
+                                    eta = eta_parts[-1].strip()
+
+                            # Update task progress
+                            if task_id in self.tasks:
+                                self.tasks[task_id]['progress'] = percent
+                                self.tasks[task_id]['speed'] = speed
+                                self.tasks[task_id]['eta'] = eta
+                                self.tasks[task_id]['downloaded'] = downloaded
 
                 except (ValueError, IndexError):
                     pass
 
         await proc.wait()
+
+        # Also read any stderr output for errors
+        stderr_output = await proc.stderr.read()
+        stderr_str = stderr_output.decode('utf-8', errors='ignore')
 
         # Find downloaded file
         file_path = None
@@ -189,6 +199,7 @@ class YtdlpService:
                 self.tasks[task_id]['progress'] = 100
                 self.tasks[task_id]['file_path'] = file_path
         else:
+            print(f"[ERROR] Download failed: {stderr_str}")
             if task_id in self.tasks:
                 self.tasks[task_id]['status'] = 'failed'
 
