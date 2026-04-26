@@ -58,6 +58,8 @@
         v-if="videoInfo"
         :video-info="videoInfo"
         v-model="selectedQuality"
+        :is-downloading="isDownloading"
+        :download-progress="progress?.progress || 0"
         @download="handleDownload"
       />
 
@@ -96,12 +98,14 @@ const videoInfo = ref<VideoInfo | null>(null)
 const selectedQuality = ref('1080p')
 const progress = ref<ProgressUpdate | null>(null)
 const taskId = ref<string | null>(null)
+const isDownloading = ref(false)
 
 let ws: WebSocket | null = null
 
 const handleParsed = (info: VideoInfo) => {
   videoInfo.value = info
   progress.value = null
+  isDownloading.value = false
   // Default to original quality
   selectedQuality.value = '原画质'
 }
@@ -117,6 +121,7 @@ const handleDownload = async () => {
     })
 
     taskId.value = response.task_id
+    isDownloading.value = true
     connectWebSocket(response.task_id)
   } catch (e: any) {
     alert('下载失败: ' + (e.data?.detail || '未知错误'))
@@ -134,13 +139,18 @@ const connectWebSocket = (id: string) => {
 
     if (data.status === 'completed') {
       ws?.close()
+      isDownloading.value = false
       // 自动触发浏览器下载保存对话框
       handleDownloadFile()
+    } else if (data.status === 'failed') {
+      ws?.close()
+      isDownloading.value = false
     }
   }
 
   ws.onerror = () => {
     alert('连接错误，请重试')
+    isDownloading.value = false
   }
 }
 

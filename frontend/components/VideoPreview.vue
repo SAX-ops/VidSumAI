@@ -73,10 +73,16 @@
         {{ isPlaying ? '重新预览' : '预览视频' }}
       </button>
       <button
-        class="flex-1 gradient-bg border-none rounded-xl py-3 text-white font-bold hover:-translate-y-1 hover:shadow-[0_12px_32px_rgba(255,107,107,0.5)] transition-all"
-        @click="$emit('download')"
+        class="flex-1 gradient-bg border-none rounded-xl py-3 text-white font-bold transition-all"
+        :class="{
+          'opacity-50 cursor-not-allowed hover:-translate-y-0 hover:shadow-none': isDownloading,
+        }"
+        :disabled="isDownloading"
+        @click="handleDownload"
       >
-        下载到本地
+        <span v-if="isDownloading">下载中 {{ downloadProgress }}%</span>
+        <span v-else-if="downloadComplete">✓ 完成</span>
+        <span v-else>下载到本地</span>
       </button>
     </div>
   </div>
@@ -88,6 +94,8 @@ import type { VideoInfo } from '~/types'
 const props = defineProps<{
   videoInfo: VideoInfo
   modelValue: string
+  isDownloading: boolean
+  downloadProgress: number
 }>()
 
 const emit = defineEmits<{
@@ -96,10 +104,26 @@ const emit = defineEmits<{
 }>()
 
 const isPlaying = ref(false)
+const downloadComplete = ref(false)
 const selectedQuality = computed({
   get: () => props.modelValue,
   set: (val) => emit('update:modelValue', val)
 })
+
+// Watch for download completion to show "✓ 完成"
+watch(() => props.isDownloading, (downloading, wasDownloading) => {
+  if (wasDownloading && !downloading) {
+    downloadComplete.value = true
+    setTimeout(() => {
+      downloadComplete.value = false
+    }, 2000)
+  }
+})
+
+const handleDownload = () => {
+  if (props.isDownloading) return
+  emit('download')
+}
 
 const selectedFormatIndex = computed(() => {
   return props.videoInfo.formats.findIndex(f => f.quality === props.modelValue)
