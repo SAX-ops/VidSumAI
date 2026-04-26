@@ -56,10 +56,10 @@
           v-model="selectedQuality"
           class="bg-dark-bg border border-dark-border rounded-lg px-3 py-2 text-white text-sm w-full"
         >
-          <option value="360p">360p（低清）</option>
-          <option value="720p">720p（标清）</option>
-          <option value="1080p">1080p（高清）</option>
-          <option value="原画质">{{ videoInfo.max_quality }}（原画）</option>
+          <option value="360p">360p（低清）.{{ qualityExt('360p') }}</option>
+          <option value="720p">720p（标清）.{{ qualityExt('720p') }}</option>
+          <option value="1080p">1080p（高清）.{{ qualityExt('1080p') }}</option>
+          <option value="原画质">{{ videoInfo.max_quality }}（原画）.{{ qualityExt(videoInfo.max_quality) }}</option>
         </select>
       </div>
     </div>
@@ -113,6 +113,21 @@ const qualityLabel = computed(() => {
   if (q === '1080p') return '1080p（高清）'
   return q
 })
+
+const qualityExt = (quality: string) => {
+  // Map display quality to format quality for lookup
+  const qualityMap: Record<string, string> = {
+    '360p': '360p',
+    '720p': '720p',
+    '1080p': '1080p',
+    '4K': '2160p',
+    '2K': '1440p',
+    '1080p': '1080p',
+  }
+  const formatQuality = qualityMap[quality] || quality
+  const format = props.videoInfo.formats.find(f => f.quality === formatQuality)
+  return format?.ext || 'mp4'
+}
 
 const startPreview = () => {
   isPlaying.value = true
