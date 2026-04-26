@@ -2,8 +2,10 @@ from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 from models import ParseRequest, VideoInfo
 from services.ytdlp import YtdlpService
-import os
 import asyncio
+import os
+import subprocess
+from typing import Optional
 
 router = APIRouter()
 ytdlp_service = YtdlpService()
@@ -94,9 +96,8 @@ async def progress_websocket(websocket: WebSocket, task_id: str):
 
 
 @router.post("/open-folder")
-async def open_folder(folder_path: str = None):
+async def open_folder(folder_path: Optional[str] = None):
     """Open the specified folder in file explorer (Windows)"""
-    import subprocess
 
     try:
         if folder_path and os.path.exists(folder_path):
