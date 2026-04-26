@@ -18,12 +18,18 @@
       <span>剩余: {{ progress.eta }}</span>
     </div>
 
-    <div v-if="progress.status === 'completed'" class="mt-4 text-center">
+    <div v-if="progress.status === 'completed'" class="mt-4 flex gap-3 justify-center">
       <button
-        class="gradient-bg border-none rounded-xl px-6 py-3 text-white font-bold cursor-pointer"
+        class="bg-white/10 border border-white/20 rounded-xl px-6 py-3 text-white font-semibold hover:bg-white/20"
+        @click="openFolder"
+      >
+        📁 打开文件夹
+      </button>
+      <button
+        class="gradient-bg border-none rounded-xl px-6 py-3 text-white font-bold"
         @click="$emit('download')"
       >
-        下载文件
+        重新下载
       </button>
     </div>
   </div>
@@ -31,6 +37,18 @@
 
 <script setup lang="ts">
 import type { ProgressUpdate } from '~/types'
+
+const config = useRuntimeConfig()
+
+const openFolder = async () => {
+  try {
+    await $fetch(`${config.public.apiBase}/api/open-folder`, {
+      method: 'POST'
+    })
+  } catch (e) {
+    console.error('Failed to open folder:', e)
+  }
+}
 
 defineProps<{
   progress: ProgressUpdate
