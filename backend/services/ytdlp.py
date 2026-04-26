@@ -83,18 +83,22 @@ class YtdlpService:
         task_id = str(uuid.uuid4())
         output_path = os.path.join(output_dir, f"{task_id}.%(ext)s")
 
-        # Map quality to yt-dlp format spec
+        # Debug: log received quality
+        print(f"[DEBUG] start_download called with quality='{quality}'")
+
+        # Map quality to yt-dlp format spec (simplified)
         format_map = {
-            "144p": "bestvideo[height<=?144]+bestaudio/best[height<=?144]",
-            "240p": "bestvideo[height<=?240]+bestaudio/best[height<=?240]",
-            "360p": "bestvideo[height<=?360]+bestaudio/best[height<=?360]",
-            "480p": "bestvideo[height<=?480]+bestaudio/best[height<=?480]",
-            "720p": "bestvideo[height<=?720]+bestaudio/best[height<=?720]",
-            "1080p": "bestvideo[height<=?1080]+bestaudio/best[height<=?1080]",
-            "4k": "bestvideo[height<=?2160]+bestaudio/best[height<=?2160]",
+            "144p": "worst",
+            "240p": "best[height<=240]",
+            "360p": "best[height<=360]",
+            "480p": "best[height<=480]",
+            "720p": "best[height<=720]",
+            "1080p": "best[height<=1080]",
+            "4k": "best[height<=2160]",
             "audio": "bestaudio/best",
         }
-        format_spec = format_map.get(quality, "bestvideo[height<=?720]+bestaudio/best[height<=?720]")
+        format_spec = format_map.get(quality, "best[height<=720]")
+        print(f"[DEBUG] format_spec='{format_spec}'")
 
         cmd = [
             "yt-dlp",
@@ -102,9 +106,9 @@ class YtdlpService:
             "--merge-output-format", "mp4",
             "-o", output_path,
             "--no-warnings",
-            "--progress",
             url
         ]
+        print(f"[DEBUG] yt-dlp command: {' '.join(cmd)}")
 
         proc = await asyncio.create_subprocess_exec(
             *cmd,
