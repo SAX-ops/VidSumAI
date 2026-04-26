@@ -57,6 +57,7 @@
       <VideoPreview
         v-if="videoInfo"
         :video-info="videoInfo"
+        v-model="selectedQuality"
         @download="handleDownload"
       />
 
@@ -112,7 +113,7 @@ const handleDownload = async () => {
   try {
     const response = await $fetch<{ task_id: string }>(`${apiBase}/api/start-download`, {
       method: 'POST',
-      body: { url: videoInfo.value.formats[0].url },
+      body: { url: videoInfo.value.url },
       params: { quality: selectedQuality.value }
     })
 

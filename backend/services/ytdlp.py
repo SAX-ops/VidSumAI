@@ -70,6 +70,7 @@ class YtdlpService:
             thumbnail=data.get("thumbnail", ""),
             duration=data.get("duration"),
             platform=self._extract_platform(url),
+            url=url,
             formats=unique_formats[:10]
         )
 

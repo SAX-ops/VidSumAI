@@ -49,6 +49,18 @@
       <p class="text-gray-500 text-sm">
         已选画质：{{ selectedQuality }}
       </p>
+
+      <!-- Quality Selector -->
+      <div class="mt-3">
+        <select
+          v-model="selectedQuality"
+          class="bg-dark-bg border border-dark-border rounded-lg px-3 py-2 text-white text-sm w-full"
+        >
+          <option v-for="format in videoInfo.formats" :key="format.quality" :value="format.quality">
+            {{ format.quality }} {{ format.ext }}
+          </option>
+        </select>
+      </div>
     </div>
 
     <!-- Action Buttons -->
@@ -74,16 +86,22 @@ import type { VideoInfo } from '~/types'
 
 const props = defineProps<{
   videoInfo: VideoInfo
-  selectedQuality: string
+  modelValue: string
 }>()
 
 const emit = defineEmits<{
+  'update:modelValue': [quality: string]
   download: []
 }>()
 
 const isPlaying = ref(false)
+const selectedQuality = computed({
+  get: () => props.modelValue,
+  set: (val) => emit('update:modelValue', val)
+})
+
 const selectedFormatIndex = computed(() => {
-  return props.videoInfo.formats.findIndex(f => f.quality === props.selectedQuality)
+  return props.videoInfo.formats.findIndex(f => f.quality === props.modelValue)
 })
 
 const startPreview = () => {

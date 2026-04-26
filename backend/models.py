@@ -15,6 +15,7 @@ class VideoInfo(BaseModel):
     thumbnail: str
     duration: Optional[int] = None
     platform: str  # "YouTube", "TikTok", etc.
+    url: str  # Original video URL
     formats: List[FormatInfo]
 
 
