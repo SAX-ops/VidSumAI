@@ -23,7 +23,7 @@
     <!-- Hero Section -->
     <main class="container mx-auto px-4 py-20">
       <h1 class="text-6xl font-extrabold text-center mb-5 leading-tight">
-        <span class="gradient-text">8K 无水印</span><br>
+        <span class="gradient-text">无水印高清</span><br>
         视频一键下载
       </h1>
       <p class="text-gray-400 text-xl text-center mb-6">
@@ -46,19 +46,18 @@
         </div>
         <div class="flex items-center gap-2 bg-primary-from/10 border border-primary-from/20 rounded-full px-5 py-2.5 text-sm text-primary-from">
           <span>📦</span>
-          <span>批量下载</span>
+          <span>多平台支持</span>
         </div>
       </div>
 
       <!-- Download Input -->
       <DownloadInput @parsed="handleParsed" />
 
-      <!-- Quality Selector -->
-      <QualitySelector
+      <!-- Video Preview -->
+      <VideoPreview
         v-if="videoInfo"
-        :formats="videoInfo.formats"
-        :selected="selectedQuality"
-        @update="selectedQuality = $event"
+        :video-info="videoInfo"
+        @download="handleDownload"
       />
 
       <!-- Progress Tracker -->
