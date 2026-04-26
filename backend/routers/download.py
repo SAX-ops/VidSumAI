@@ -65,6 +65,95 @@ async def start_download(request: ParseRequest, quality: str = "720p"):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@router.get("/download-direct")
+async def download_direct(url: str, quality: str = "720p"):
+    """Download video directly with browser save dialog (no progress tracking)"""
+    import subprocess
+    import tempfile
+
+    print(f"[DEBUG] download_direct called with quality='{quality}'")
+
+    try:
+        # Map quality to yt-dlp format spec (simplified)
+        format_map = {
+            "144p": "worst",
+            "240p": "best[height<=240]",
+            "360p": "best[height<=360]",
+            "480p": "best[height<=480]",
+            "720p": "best[height<=720]",
+            "1080p": "best[height<=1080]",
+            "4k": "best[height<=2160]",
+            "audio": "bestaudio/best",
+        }
+        format_spec = format_map.get(quality, "best[height<=720]")
+        print(f"[DEBUG] format_spec='{format_spec}'")
+
+        # Get video title for filename
+        probe_cmd = ["yt-dlp", "--get-title", "--no-download", url]
+        proc = await asyncio.create_subprocess_exec(
+            *probe_cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout, _ = await proc.communicate()
+        title = stdout.decode().strip().replace('/', '-').replace('\\', '-') or "video"
+
+        # Create temp file
+        temp_dir = tempfile.gettempdir()
+        output_path = os.path.join(temp_dir, f"vidsumai_{quality}.%(ext)s")
+
+        # Download command
+        cmd = [
+            "yt-dlp",
+            "-f", format_spec,
+            "--merge-output-format", "mp4",
+            "-o", output_path,
+            "--no-warnings",
+            url
+        ]
+
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        await proc.communicate()
+
+        # Find the downloaded file
+        for f in os.listdir(temp_dir):
+            if f.startswith("vidsumai_") and f.endswith(".mp4"):
+                file_path = os.path.join(temp_dir, f)
+                filename = f"{title}.mp4"
+
+                async def file_iterator():
+                    with open(file_path, "rb") as f:
+                        while chunk := f.read(8192):
+                            yield chunk
+
+                # Clean up temp file after reading
+                def cleanup():
+                    try:
+                        os.remove(file_path)
+                    except:
+                        pass
+
+                # Return streaming response with attachment header
+                return StreamingResponse(
+                    file_iterator(),
+                    media_type="video/mp4",
+                    headers={
+                        "Content-Disposition": f'attachment; filename="{filename}"'
+                    }
+                )
+
+        raise HTTPException(status_code=500, detail="Download failed")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.websocket("/ws/progress/{task_id}")
 async def progress_websocket(websocket: WebSocket, task_id: str):
     await websocket.accept()
