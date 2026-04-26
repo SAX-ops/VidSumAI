@@ -145,9 +145,31 @@ const connectWebSocket = (id: string) => {
   }
 }
 
-const handleDownloadFile = () => {
-  if (taskId.value) {
-    window.open(`${apiBase}/api/download/${taskId.value}`, '_blank')
+const handleDownloadFile = async () => {
+  if (!taskId.value || !videoInfo.value) return
+
+  try {
+    const filename = `${videoInfo.value.title || 'video'}.mp4`
+    const response = await fetch(`${apiBase}/api/download/${taskId.value}`)
+
+    if (!response.ok) {
+      throw new Error('Download failed')
+    }
+
+    const blob = await response.blob()
+    const objectUrl = URL.createObjectURL(blob)
+
+    const a = document.createElement('a')
+    a.href = objectUrl
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+
+    // 清理
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 1000)
+  } catch (e: any) {
+    alert('保存失败: ' + (e.message || '未知错误'))
   }
 }
 </script>
