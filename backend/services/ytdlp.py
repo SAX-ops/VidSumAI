@@ -65,12 +65,26 @@ class YtdlpService:
                 seen.add(f.quality)
                 unique_formats.append(f)
 
+        # Get max quality for display
+        max_q = unique_formats[0].quality if unique_formats else "Unknown"
+        # Convert to user-friendly format: 2160p -> 4K, 1440p -> 2K, etc.
+        max_q_display = max_q
+        if max_q.endswith("p"):
+            h = int(max_q.replace("p", ""))
+            if h >= 2160:
+                max_q_display = "4K"
+            elif h >= 1440:
+                max_q_display = "2K"
+            elif h >= 1080:
+                max_q_display = "1080p"
+
         return VideoInfo(
             title=data.get("title", "Unknown"),
             thumbnail=data.get("thumbnail", ""),
             duration=data.get("duration"),
             platform=self._extract_platform(url),
             url=url,
+            max_quality=max_q_display,
             formats=unique_formats[:10]
         )
 

@@ -16,6 +16,7 @@ class VideoInfo(BaseModel):
     duration: Optional[int] = None
     platform: str  # "YouTube", "TikTok", etc.
     url: str  # Original video URL
+    max_quality: str  # Highest available quality, e.g. "4K", "1440p", "1080p"
     formats: List[FormatInfo]
 
 
