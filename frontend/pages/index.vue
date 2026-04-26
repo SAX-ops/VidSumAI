@@ -102,9 +102,8 @@ let ws: WebSocket | null = null
 const handleParsed = (info: VideoInfo) => {
   videoInfo.value = info
   progress.value = null
-  if (info.formats.length > 0) {
-    selectedQuality.value = info.formats[0].quality
-  }
+  // Default to original quality
+  selectedQuality.value = '原画质'
 }
 
 const handleDownload = async () => {
