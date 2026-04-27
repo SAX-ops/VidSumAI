@@ -53,11 +53,11 @@ async def download_file(task_id: str):
 
 
 @router.post("/start-download")
-async def start_download(request: ParseRequest, quality: str = "720p"):
+async def start_download(request: ParseRequest):
     try:
         task_id = await ytdlp_service.start_download(
             url=request.url,
-            quality=quality,
+            quality=request.quality,
             output_dir=DOWNLOAD_DIR
         )
         return {"task_id": task_id}

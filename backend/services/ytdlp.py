@@ -1,8 +1,10 @@
-import json
-import uuid
-import os
 import asyncio
+import os
+import uuid
 from typing import Optional
+
+from yt_dlp import YoutubeDL
+
 from models import VideoInfo, FormatInfo
 
 
@@ -25,28 +27,18 @@ class YtdlpService:
         return "Unknown"
 
     async def parse_url(self, url: str) -> VideoInfo:
-        cmd = [
-            "yt-dlp",
-            "--dump-json",
-            "--no-download",
-            "--no-warnings",
-            "--add-header", "User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "--add-header", "Referer:https://www.bilibili.com",
-            url
-        ]
+        def _extract_info():
+            ydl_opts = {
+                'dump_json': True,
+                'no_download': True,
+                'no_warnings': True,
+                'quiet': True,
+            }
+            with YoutubeDL(ydl_opts) as ydl:
+                data = ydl.extract_info(url, download=False)
+            return data
 
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-
-        stdout, stderr = await proc.communicate()
-
-        if proc.returncode != 0:
-            raise Exception(f"Failed to parse URL: {stderr.decode()}")
-
-        data = json.loads(stdout.decode())
+        data = await asyncio.to_thread(_extract_info)
 
         formats = []
         for f in data.get("formats", []):
@@ -66,6 +58,9 @@ class YtdlpService:
             if f.quality not in seen:
                 seen.add(f.quality)
                 unique_formats.append(f)
+
+        # Filter out 144p (no audio)
+        unique_formats = [f for f in unique_formats if f.quality != "144p"]
 
         # Get max quality for display
         max_q = unique_formats[0].quality if unique_formats else "Unknown"
@@ -98,19 +93,39 @@ class YtdlpService:
         task_id = str(uuid.uuid4())
         output_path = os.path.join(output_dir, f"{task_id}.%(ext)s")
 
-        # Map quality to yt-dlp format spec
-        format_map = {
-            "360p": "best[height<=360]",
-            "720p": "best[height<=720]",
-            "1080p": "best[height<=1080]",
-            "原画质": "best",
-            "audio": "bestaudio/best",
-        }
-        format_spec = format_map.get(quality, "best[height<=720]")
+        # Check if YouTube URL
+        is_youtube_url = "youtube.com/watch" in url or "youtu.be/" in url
+
+        # Parse quality number
+        quality_num = int(quality.lower().replace('p', '').replace('k', '000')) if quality else 0
+
+        # Determine format spec based on quality
+        if is_youtube_url and quality_num <= 480:
+            actual_quality = max(quality_num, 360)
+            format_spec = f"bestvideo[height={actual_quality}]+bestaudio/best[height={actual_quality}]"
+        elif quality == "1080p":
+            format_spec = "bestvideo[height<=?1080]+bestaudio/best[height<=?1080]"
+        elif quality == "4k":
+            format_spec = "bestvideo[height<=?2160][vcodec^=avc]+bestaudio/bestvideo[height<=?2160]+bestaudio"
+        elif quality == "audio":
+            format_spec = "bestaudio/best"
+        else:
+            format_spec = f"bestvideo[height<=?{quality_num}]+bestaudio/best[height<=?{quality_num}]"
+
+        # Get video info for total size estimation
+        total_size = 0
+        try:
+            video_info = await self.parse_url(url)
+            for f in video_info.formats:
+                if f.size:
+                    total_size = max(total_size, f.size)
+        except Exception:
+            pass
 
         self.tasks[task_id] = {
             "status": "downloading",
             "progress": 0,
+            "total_size": total_size,
             "output_path": output_path,
             "speed": "",
             "eta": "",
@@ -118,91 +133,54 @@ class YtdlpService:
             "file_path": None
         }
 
-        # Start async download with real-time progress reading
-        asyncio.create_task(self._run_download(task_id, url, format_spec, output_path, output_dir))
+        # Start download in background thread
+        asyncio.create_task(self._run_download(task_id, url, format_spec, output_path))
 
         return task_id
 
-    async def _run_download(self, task_id: str, url: str, format_spec: str, output_path: str, output_dir: str):
-        import re
+    async def _run_download(self, task_id: str, url: str, format_spec: str, output_path: str):
+        """Run yt-dlp download in a background thread with progress hooks."""
+        task = self.tasks[task_id]
 
-        cmd = [
-            "yt-dlp",
-            "-f", format_spec,
-            "--merge-output-format", "mp4",
-            "--newline",
-            "--add-header", "User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "--add-header", "Referer:https://www.bilibili.com",
-            "-o", output_path,
-            url
-        ]
+        def progress_hook(d):
+            if d['status'] == 'downloading':
+                percent_str = d.get('_percent_str', '0%')
+                try:
+                    progress = float(percent_str.rstrip('%'))
+                except ValueError:
+                    progress = 0
 
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT
-        )
+                speed = d.get('_speed_str', '')
+                eta = d.get('_eta_str', '')
+                downloaded = d.get('_downloaded_str', '')
 
-        async def read_stream():
-            while True:
-                line = await proc.stdout.readline()
-                if not line:
-                    break
-                yield line.decode().strip()
+                task['progress'] = min(99, progress)
+                task['speed'] = speed
+                task['eta'] = eta
+                task['downloaded'] = downloaded
+                task['status'] = 'downloading'
+            elif d['status'] == 'finished':
+                task['progress'] = 100
+                task['status'] = 'completed'
+                task['file_path'] = d.get('filename', '')
+
+        def _download():
+            ydl_opts = {
+                'format': format_spec,
+                'merge_output_format': 'mp4',
+                'outtmpl': output_path,
+                'quiet': True,
+                'no_warnings': True,
+                'progress_hooks': [progress_hook],
+            }
+            with YoutubeDL(ydl_opts) as ydl:
+                ydl.download([url])
 
         try:
-            async for line in read_stream():
-                print(f"[DEBUG] yt-dlp output: {line}")
-
-                if '[download]' in line and '%' in line:
-                    try:
-                        percent = 0.0
-                        downloaded_str = ""
-                        speed = ""
-                        eta = ""
-
-                        match = re.search(r'([\d.]+)%\s+of\s+([~]?[\d.]+[KMGT]i?B)', line)
-                        if match:
-                            percent = float(match.group(1))
-                            total_num = float(re.sub(r'[~KMGT]i?B', '', match.group(2)))
-                            downloaded_str = f"{total_num * percent / 100:.2f}MiB"
-
-                        speed_match = re.search(r'at\s+([\d.]+\s*[KMGT]i?B/s)', line)
-                        if speed_match:
-                            speed = speed_match.group(1)
-
-                        eta_match = re.search(r'ETA ([\d:]+)', line)
-                        if eta_match:
-                            eta = eta_match.group(1)
-
-                        if task_id in self.tasks:
-                            self.tasks[task_id]['progress'] = percent
-                            self.tasks[task_id]['speed'] = speed
-                            self.tasks[task_id]['eta'] = eta
-                            self.tasks[task_id]['downloaded'] = downloaded_str
-
-                    except (ValueError, IndexError):
-                        pass
-
-                await asyncio.sleep(0.05)
-        finally:
-            await proc.wait()
-
-        # Find downloaded file
-        file_path = None
-        for f in os.listdir(output_dir):
-            if f.startswith(task_id):
-                file_path = os.path.join(output_dir, f)
-                break
-
-        if file_path and os.path.exists(file_path):
-            if task_id in self.tasks:
-                self.tasks[task_id]['status'] = 'completed'
-                self.tasks[task_id]['progress'] = 100
-                self.tasks[task_id]['file_path'] = file_path
-        else:
-            if task_id in self.tasks:
-                self.tasks[task_id]['status'] = 'failed'
+            await asyncio.to_thread(_download)
+        except Exception as e:
+            task['status'] = 'failed'
+            task['error'] = str(e)
 
     def _format_bytes(self, bytes_val: int) -> str:
         for unit in ['B', 'KB', 'MB', 'GB']:

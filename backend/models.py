@@ -22,6 +22,7 @@ class VideoInfo(BaseModel):
 
 class ParseRequest(BaseModel):
     url: str
+    quality: Optional[str] = "720p"
 
 
 class DownloadTask(BaseModel):

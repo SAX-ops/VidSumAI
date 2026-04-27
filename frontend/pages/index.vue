@@ -63,6 +63,16 @@
         @download="handleDownload"
       />
 
+      <!-- Download Button -->
+      <div v-if="videoInfo" class="flex justify-center mt-5">
+        <button
+          class="gradient-bg border-none rounded-xl px-8 py-4 text-white text-lg font-bold cursor-pointer transition-all hover:-translate-y-1 hover:shadow-[0_12px_32px_rgba(255,107,107,0.5)]"
+          @click="handleDownload"
+        >
+          开始下载
+        </button>
+      </div>
+
       <!-- Progress Tracker -->
       <ProgressTracker
         v-if="progress"
@@ -106,18 +116,28 @@ const handleParsed = (info: VideoInfo) => {
   videoInfo.value = info
   progress.value = null
   isDownloading.value = false
-  // Default to original quality
   selectedQuality.value = '原画质'
 }
 
 const handleDownload = async () => {
   if (!videoInfo.value) return
 
+  const selectedFormat = videoInfo.value.formats.find(
+    f => f.quality === selectedQuality.value
+  )
+
+  if (!selectedFormat) {
+    alert('未找到对应的清晰度格式')
+    return
+  }
+
   try {
     const response = await $fetch<{ task_id: string }>(`${apiBase}/api/start-download`, {
       method: 'POST',
-      body: { url: videoInfo.value.url },
-      params: { quality: selectedQuality.value }
+      body: {
+        url: selectedFormat.url,
+        quality: selectedQuality.value
+      }
     })
 
     taskId.value = response.task_id
@@ -140,7 +160,6 @@ const connectWebSocket = (id: string) => {
     if (data.status === 'completed') {
       ws?.close()
       isDownloading.value = false
-      // 自动触发浏览器下载保存对话框
       handleDownloadFile()
     } else if (data.status === 'failed') {
       ws?.close()
@@ -175,7 +194,6 @@ const handleDownloadFile = async () => {
     a.click()
     document.body.removeChild(a)
 
-    // 清理
     setTimeout(() => URL.revokeObjectURL(objectUrl), 1000)
   } catch (e: any) {
     alert('保存失败: ' + (e.message || '未知错误'))
