@@ -111,10 +111,6 @@ python main.py
 pip install xxx
 ```
 
-### Windows 环境
-
-本项目在 Windows 上开发，避免使用 Linux 专属命令（如 `chmod`、`ln -s`）。
-
 ## 免责声明
 
 本项目仅供学习交流使用，请勿用于商业用途。下载内容版权归原作者所有，请遵守相关平台服务条款及当地法律法规。
