@@ -9,6 +9,7 @@ export interface VideoInfo {
   title: string
   thumbnail: string
   duration: number | null
+  platform: string
   url: string
   max_quality: string
   formats: FormatInfo[]
