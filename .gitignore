@@ -9,6 +9,10 @@ build/
 .next/
 out/
 
+# Nuxt
+frontend/.nuxt/
+frontend/.output/
+
 # Runtime
 .env
 .env.local
@@ -27,6 +31,9 @@ yarn-error.log*
 *.swp
 *.swo
 
+# Claude Code
+.claude/
+
 # OS
 .DS_Store
 Thumbs.db
@@ -43,10 +50,21 @@ __pycache__/
 venv/
 .venv/
 *.egg-info/
-dist/
-build/
 .eggs/
 
 # uv
 .python-version
 .worktrees/
+
+# Backend downloads (temporary files)
+backend/downloads/
+
+# Test files
+test-*.mjs
+test-*.png
+vidsumai-*.png
+test-results/
+.playwright-mcp/
+
+# Project status (local)
+PROJECT_STATUS.md

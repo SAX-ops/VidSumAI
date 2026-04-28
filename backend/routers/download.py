@@ -1,16 +1,19 @@
-from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, Query
+from fastapi.responses import StreamingResponse, Response
 from models import ParseRequest, VideoInfo
 from services.ytdlp import YtdlpService
 import asyncio
 import os
 import subprocess
+import httpx
 from typing import Optional
+from urllib.parse import urlparse, quote
 
 router = APIRouter()
 ytdlp_service = YtdlpService()
 
-DOWNLOAD_DIR = os.path.join(os.path.dirname(__file__), "..", "downloads")
+# Use absolute path for downloads directory
+DOWNLOAD_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "downloads"))
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 
@@ -25,31 +28,66 @@ async def parse_video(request: ParseRequest):
 
 @router.get("/download/{task_id}")
 async def download_file(task_id: str):
-    if task_id not in ytdlp_service.tasks:
-        raise HTTPException(status_code=404, detail="Task not found")
+    file_path = None
 
-    task = ytdlp_service.tasks[task_id]
-    if task["status"] != "completed":
-        raise HTTPException(status_code=400, detail="Download not ready")
+    # First try: check if task is in memory (same session)
+    print(f"[download] Looking for task_id={task_id}")
+    print(f"[download] Available tasks: {list(ytdlp_service.tasks.keys())}")
+    if task_id in ytdlp_service.tasks:
+        task = ytdlp_service.tasks[task_id]
+        if task["status"] == "completed":
+            file_path = task.get("file_path")
+            # Resolve relative paths to absolute
+            if file_path and not os.path.isabs(file_path):
+                file_path = os.path.abspath(file_path)
+            if file_path and os.path.exists(file_path):
+                filename = os.path.basename(file_path)
+                async def file_iterator():
+                    try:
+                        with open(file_path, "rb") as f:
+                            while chunk := f.read(8192):
+                                yield chunk
+                    finally:
+                        # Clean up temporary file after streaming
+                        try:
+                            os.remove(file_path)
+                            print(f"[download] Cleaned up: {file_path}")
+                        except OSError:
+                            pass
+                return StreamingResponse(
+                    file_iterator(),
+                    media_type="video/mp4",
+                    headers={
+                        "Content-Disposition": f'attachment; filename="{filename}"'
+                    }
+                )
 
-    file_path = task.get("file_path")
-    if not file_path or not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="File not found")
+    # Second try: look for file in downloads folder (file persists across restarts)
+    candidate = os.path.join(DOWNLOAD_DIR, f"{task_id}.mp4")
+    if os.path.exists(candidate):
+        file_path = candidate
+        filename = f"{task_id}.mp4"
+        async def file_iterator():
+            try:
+                with open(file_path, "rb") as f:
+                    while chunk := f.read(8192):
+                        yield chunk
+            finally:
+                # Clean up temporary file after streaming
+                try:
+                    os.remove(file_path)
+                    print(f"[download] Cleaned up: {file_path}")
+                except OSError:
+                    pass
+        return StreamingResponse(
+            file_iterator(),
+            media_type="video/mp4",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"'
+            }
+        )
 
-    filename = os.path.basename(file_path)
-
-    async def file_iterator():
-        with open(file_path, "rb") as f:
-            while chunk := f.read(8192):
-                yield chunk
-
-    return StreamingResponse(
-        file_iterator(),
-        media_type="video/mp4",
-        headers={
-            "Content-Disposition": f'attachment; filename="{filename}"'
-        }
-    )
+    raise HTTPException(status_code=404, detail="File not found")
 
 
 @router.post("/start-download")
@@ -197,3 +235,31 @@ async def open_folder(folder_path: Optional[str] = None):
         return {"success": True, "path": target}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/proxy/image")
+async def proxy_image(url: str = Query(...)):
+    """Proxy image requests to bypass Referer hotlink protection (e.g. Bilibili thumbnails)"""
+    parsed = urlparse(url)
+    allowed_domains = ['bilibili.com', 'hdslb.com', 'bfmtv.com']
+    is_allowed = any(d in parsed.netloc for d in allowed_domains)
+
+    if not is_allowed:
+        raise HTTPException(status_code=403, detail="Domain not allowed for proxy")
+
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+        'Referer': 'https://www.bilibili.com/',
+        'Origin': 'https://www.bilibili.com',
+    }
+
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=10) as client:
+            resp = await client.get(url, headers=headers)
+            if resp.status_code != 200:
+                raise HTTPException(status_code=resp.status_code, detail="Failed to fetch image")
+
+            content_type = resp.headers.get('content-type', 'image/jpeg')
+            return Response(content=resp.content, media_type=content_type)
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Image proxy error: {str(e)}")

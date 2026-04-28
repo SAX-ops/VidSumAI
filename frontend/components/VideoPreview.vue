@@ -5,7 +5,7 @@
       <!-- Thumbnail (shown when not playing) -->
       <img
         v-if="!isPlaying"
-        :src="videoInfo.thumbnail"
+        :src="thumbnailUrl"
         class="w-full h-full object-contain"
         alt="Video thumbnail"
       />
@@ -80,8 +80,7 @@
         :disabled="isDownloading"
         @click="handleDownload"
       >
-        <span v-if="isDownloading">下载中 {{ downloadProgress }}%</span>
-        <span v-else-if="downloadComplete">✓ 完成</span>
+        <span v-if="isDownloading">下载中 {{ safeProgress }}%</span>
         <span v-else>下载到本地</span>
       </button>
     </div>
@@ -103,29 +102,42 @@ const emit = defineEmits<{
   download: []
 }>()
 
+const config = useRuntimeConfig()
+const apiBase = config.public.apiBase
+
 const isPlaying = ref(false)
-const downloadComplete = ref(false)
 const selectedQuality = computed({
   get: () => props.modelValue,
   set: (val) => emit('update:modelValue', val)
 })
 
-// Watch for download completion to show "✓ 完成"
-watch(() => props.isDownloading, (downloading, wasDownloading) => {
-  if (wasDownloading && !downloading) {
-    downloadComplete.value = true
-    setTimeout(() => {
-      downloadComplete.value = false
-    }, 2000)
+// Bilibili thumbnails need proxy to bypass Referer hotlink protection
+const thumbnailUrl = computed(() => {
+  if (props.videoInfo.platform === 'Bilibili' && props.videoInfo.thumbnail) {
+    return `${apiBase}/api/proxy/image?url=${encodeURIComponent(props.videoInfo.thumbnail)}`
   }
+  return props.videoInfo.thumbnail
+})
+
+// 安全进度值，防止 NaN 或 undefined
+const safeProgress = computed(() => {
+  const p = props.downloadProgress
+  if (typeof p !== 'number' || isNaN(p) || p < 0) return 0
+  return Math.round(p)
 })
 
 const handleDownload = () => {
-  if (props.isDownloading) return
+  console.log('[VideoPreview] handleDownload called, isDownloading:', props.isDownloading)
+  if (props.isDownloading) {
+    console.log('[VideoPreview] Skipping because isDownloading is true')
+    return
+  }
+  console.log('[VideoPreview] Emitting download event')
   emit('download')
 }
 
 const selectedFormatIndex = computed(() => {
+  if (props.modelValue === '原画质') return 0
   return props.videoInfo.formats.findIndex(f => f.quality === props.modelValue)
 })
 
@@ -139,14 +151,12 @@ const qualityLabel = computed(() => {
 })
 
 const qualityExt = (quality: string) => {
-  // Map display quality to format quality for lookup
   const qualityMap: Record<string, string> = {
     '360p': '360p',
     '720p': '720p',
     '1080p': '1080p',
     '4K': '2160p',
     '2K': '1440p',
-    '1080p': '1080p',
   }
   const formatQuality = qualityMap[quality] || quality
   const format = props.videoInfo.formats.find(f => f.quality === formatQuality)

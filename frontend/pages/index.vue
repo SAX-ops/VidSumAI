@@ -59,26 +59,19 @@
         :video-info="videoInfo"
         v-model="selectedQuality"
         :is-downloading="isDownloading"
-        :download-progress="progress?.progress || 0"
+        :download-progress="displayProgress"
         @download="handleDownload"
       />
-
-      <!-- Download Button -->
-      <div v-if="videoInfo" class="flex justify-center mt-5">
-        <button
-          class="gradient-bg border-none rounded-xl px-8 py-4 text-white text-lg font-bold cursor-pointer transition-all hover:-translate-y-1 hover:shadow-[0_12px_32px_rgba(255,107,107,0.5)]"
-          @click="handleDownload"
-        >
-          开始下载
-        </button>
-      </div>
 
       <!-- Progress Tracker -->
       <ProgressTracker
         v-if="progress"
         :progress="progress"
         :filename="videoInfo?.title || 'video'"
-        @download="handleDownloadFile"
+        :display-progress="displayProgress"
+        :file-path="downloadFilePath"
+        @copy-path="copyFilePath"
+        @re-download="handleDownload"
       />
 
       <!-- Platform List -->
@@ -109,6 +102,8 @@ const selectedQuality = ref('1080p')
 const progress = ref<ProgressUpdate | null>(null)
 const taskId = ref<string | null>(null)
 const isDownloading = ref(false)
+const displayProgress = ref(0)
+const downloadFilePath = ref<string | null>(null)
 
 let ws: WebSocket | null = null
 
@@ -116,87 +111,196 @@ const handleParsed = (info: VideoInfo) => {
   videoInfo.value = info
   progress.value = null
   isDownloading.value = false
+  displayProgress.value = 0
+  taskId.value = null
+  downloadFilePath.value = null
   selectedQuality.value = '原画质'
+
+  // 关闭之前的 WebSocket
+  if (ws) {
+    ws.close()
+    ws = null
+  }
 }
 
 const handleDownload = async () => {
-  if (!videoInfo.value) return
+  console.log('[DEBUG] handleDownload called')
+  console.log('[DEBUG] videoInfo:', !!videoInfo.value)
+  console.log('[DEBUG] selectedQuality:', selectedQuality.value)
+  console.log('[DEBUG] isDownloading before:', isDownloading.value)
 
-  const selectedFormat = videoInfo.value.formats.find(
-    f => f.quality === selectedQuality.value
-  )
+  if (!videoInfo.value) {
+    console.log('[DEBUG] videoInfo is null, returning')
+    return
+  }
+
+  // 重置状态
+  progress.value = null
+  displayProgress.value = 0
+  downloadFilePath.value = null
+
+  // Handle "原画质" (original quality) — use the first (highest) format
+  const selectedFormat = selectedQuality.value === '原画质'
+    ? videoInfo.value.formats[0]
+    : videoInfo.value.formats.find(f => f.quality === selectedQuality.value)
+
+  console.log('[DEBUG] selectedFormat:', selectedFormat ? 'found' : 'NOT FOUND')
+  console.log('[DEBUG] available formats:', videoInfo.value.formats.map(f => f.quality))
 
   if (!selectedFormat) {
-    alert('未找到对应的清晰度格式')
+    alert('未找到对应的清晰度格式，当前选择：' + selectedQuality.value)
     return
   }
 
   try {
+    // 使用原始视频 URL，而不是 direct playback URL
+    console.log('[DEBUG] Calling API with url:', videoInfo.value.url)
     const response = await $fetch<{ task_id: string }>(`${apiBase}/api/start-download`, {
       method: 'POST',
       body: {
-        url: selectedFormat.url,
+        url: videoInfo.value.url,
         quality: selectedQuality.value
       }
     })
 
+    console.log('[DEBUG] API response:', response)
     taskId.value = response.task_id
     isDownloading.value = true
+    console.log('[DEBUG] isDownloading after set:', isDownloading.value)
     connectWebSocket(response.task_id)
   } catch (e: any) {
-    alert('下载失败: ' + (e.data?.detail || '未知错误'))
+    console.error('[DEBUG] API error:', e)
+    alert('下载失败: ' + (e.data?.detail || e.message || '未知错误'))
+    isDownloading.value = false
   }
 }
 
 const connectWebSocket = (id: string) => {
+  // 关闭旧连接
+  if (ws) {
+    console.log('[WS] Closing previous connection')
+    ws.close()
+    ws = null
+  }
+
   const wsUrl = apiBase.replace('http', 'ws') + `/api/ws/progress/${id}`
+  console.log('[WS] Connecting to:', wsUrl)
 
   ws = new WebSocket(wsUrl)
+
+  ws.onopen = () => {
+    console.log('[WS] Connected')
+  }
 
   ws.onmessage = (event) => {
     const data = JSON.parse(event.data)
     progress.value = data
 
+    // 进度只取最大值，保证单调递增
+    if (data.progress !== undefined && data.progress > displayProgress.value) {
+      displayProgress.value = data.progress
+    }
+
     if (data.status === 'completed') {
+      console.log('[WS] Download completed, task_id:', taskId.value)
       ws?.close()
       isDownloading.value = false
+      downloadFilePath.value = `${taskId.value}.mp4`
       handleDownloadFile()
     } else if (data.status === 'failed') {
+      console.log('[WS] Download failed:', data.error)
       ws?.close()
       isDownloading.value = false
     }
   }
 
-  ws.onerror = () => {
-    alert('连接错误，请重试')
-    isDownloading.value = false
+  ws.onerror = (error) => {
+    console.error('[WS] Error:', error)
+  }
+
+  ws.onclose = (event) => {
+    console.log('[WS] Closed, code:', event.code, 'reason:', event.reason)
   }
 }
 
 const handleDownloadFile = async () => {
-  if (!taskId.value || !videoInfo.value) return
+  if (!taskId.value || !videoInfo.value) {
+    console.log('[Download] Missing taskId or videoInfo')
+    return
+  }
 
   try {
     const filename = `${videoInfo.value.title || 'video'}.mp4`
+    console.log('[Download] Fetching:', `${apiBase}/api/download/${taskId.value}`)
     const response = await fetch(`${apiBase}/api/download/${taskId.value}`)
+    console.log('[Download] Response status:', response.status, 'ok:', response.ok)
 
     if (!response.ok) {
       throw new Error('Download failed')
     }
 
-    const blob = await response.blob()
-    const objectUrl = URL.createObjectURL(blob)
+    // 保存文件路径（从 Content-Disposition header 提取）
+    const contentDisposition = response.headers.get('Content-Disposition')
+    if (contentDisposition) {
+      const match = contentDisposition.match(/filename="?([^";]+)"?/)
+      if (match) {
+        downloadFilePath.value = match[1]
+      }
+    }
 
+    const blob = await response.blob()
+    console.log('[Download] Blob size:', blob.size)
+
+    // Try File System Access API for "Save As" dialog (Chrome/Edge)
+    if ('showSaveFilePicker' in window) {
+      try {
+        const handle = await (window as any).showSaveFilePicker({
+          suggestedName: filename,
+          types: [{
+            description: 'Video File',
+            accept: { 'video/mp4': ['.mp4'] }
+          }]
+        })
+        const writable = await handle.createWritable()
+        await writable.write(blob)
+        await writable.close()
+        console.log('[Download] Saved via Save As dialog')
+        return
+      } catch (e: any) {
+        // User cancelled the dialog
+        if (e.name === 'AbortError') {
+          console.log('[Download] Save dialog cancelled by user')
+          return
+        }
+        // Fallback to blob download
+        console.log('[Download] showSaveFilePicker failed, falling back to blob:', e)
+      }
+    }
+
+    // Fallback: blob URL download (saves to default downloads folder)
+    const objectUrl = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = objectUrl
     a.download = filename
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
+    console.log('[Download] Success! File triggered download.')
 
     setTimeout(() => URL.revokeObjectURL(objectUrl), 1000)
   } catch (e: any) {
+    console.error('[Download] Error:', e)
     alert('保存失败: ' + (e.message || '未知错误'))
+  }
+}
+
+const copyFilePath = async () => {
+  if (!downloadFilePath.value) return
+  try {
+    await navigator.clipboard.writeText(downloadFilePath.value)
+    alert('路径已复制到剪贴板')
+  } catch {
+    alert('复制失败，请手动复制：\n' + downloadFilePath.value)
   }
 }
 </script>
